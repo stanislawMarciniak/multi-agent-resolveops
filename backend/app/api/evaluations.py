@@ -16,7 +16,7 @@ from app.evals.compare import (
     OUTPUT_PATH,
     SINGLE_AGENT_PATH,
 )
-from app.evals.models import EvalReport, EvalVariant
+from app.evals.models import EvalVariant
 
 router = APIRouter(
     prefix="/evaluations",
@@ -58,14 +58,76 @@ def _load_json(path: Path) -> Any:
         ) from exc
 
 
-def _load_report(variant: EvalVariant) -> EvalReport:
+def _normalize_report(payload: Any) -> dict[str, Any]:
+    """Accept current and legacy eval JSON shapes for the UI."""
+    if not isinstance(payload, dict):
+        raise HTTPException(
+            status_code=500,
+            detail="Evaluation report must be a JSON object.",
+        )
+
+    summary_raw = payload.get("summary", {})
+    if not isinstance(summary_raw, dict):
+        raise HTTPException(
+            status_code=500,
+            detail="Evaluation summary must be an object.",
+        )
+
+    summary = dict(summary_raw)
+    cases_raw = payload.get("cases", [])
+    if not isinstance(cases_raw, list):
+        raise HTTPException(
+            status_code=500,
+            detail="Evaluation cases must be a list.",
+        )
+
+    cases: list[dict[str, Any]] = []
+    for item in cases_raw:
+        if not isinstance(item, dict):
+            continue
+        case = dict(item)
+        if "strict_passed" not in case:
+            case["strict_passed"] = bool(case.get("passed", False))
+        cases.append(case)
+
+    if "strict_passed_cases" not in summary:
+        summary["strict_passed_cases"] = int(
+            summary.get("passed_cases", 0)
+        )
+    if "strict_pass_rate" not in summary:
+        summary["strict_pass_rate"] = float(
+            summary.get("pass_rate", 0.0)
+        )
+    if "average_root_cause_score" not in summary:
+        summary["average_root_cause_score"] = summary.get(
+            "root_cause_accuracy"
+        )
+    if "approval_accuracy" not in summary:
+        summary["approval_accuracy"] = None
+    if "error_cases" not in summary:
+        summary["error_cases"] = sum(
+            1 for case in cases if case.get("run_error")
+        )
+    if "tag_strict_pass_rates" not in summary:
+        summary["tag_strict_pass_rates"] = dict(
+            summary.get("tag_pass_rates") or {}
+        )
+    if "scoring_version" not in summary:
+        summary["scoring_version"] = "legacy-file"
+
+    return {
+        "summary": summary,
+        "cases": cases,
+    }
+
+
+def _load_report(variant: EvalVariant) -> dict[str, Any]:
     path = VARIANT_PATHS[variant]
 
     if variant is EvalVariant.MULTI_AGENT:
         path = _resolve_multi_agent_path()
 
-    payload = _load_json(path)
-    return EvalReport.model_validate(payload)
+    return _normalize_report(_load_json(path))
 
 
 class EvaluationOverview(BaseModel):
@@ -81,7 +143,7 @@ class EvaluationOverview(BaseModel):
     response_model=EvaluationOverview,
 )
 async def get_evaluations_overview() -> EvaluationOverview:
-    reports: dict[str, EvalReport] = {}
+    reports: dict[str, dict[str, Any]] = {}
 
     for variant in EvalVariant:
         try:
@@ -95,18 +157,19 @@ async def get_evaluations_overview() -> EvaluationOverview:
             detail="No evaluation results found.",
         )
 
-    first = next(iter(reports.values()))
+    first_summary = next(iter(reports.values()))["summary"]
 
     return EvaluationOverview(
-        dataset_name=first.summary.dataset_name,
-        dataset_version=first.summary.dataset_version,
-        total_cases=first.summary.total_cases,
+        dataset_name=str(first_summary.get("dataset_name", "")),
+        dataset_version=str(first_summary.get("dataset_version", "")),
+        total_cases=int(first_summary.get("total_cases", 0)),
         variants={
-            key: report.summary.model_dump(mode="json")
+            key: dict(report["summary"])
             for key, report in reports.items()
         },
         comparison_available=OUTPUT_PATH.exists(),
     )
+
 
 
 @router.get("/comparison")
@@ -182,7 +245,7 @@ async def get_showcase_scenarios() -> list[ShowcaseScenario]:
             detail="Dataset cases must be a list.",
         )
 
-    reports: dict[str, EvalReport] = {}
+    reports: dict[str, dict[str, Any]] = {}
     for variant in EvalVariant:
         try:
             reports[variant.value] = _load_report(variant)
@@ -243,25 +306,27 @@ async def get_showcase_scenarios() -> list[ShowcaseScenario]:
         for variant_name, report in reports.items():
             variant_cases = [
                 case
-                for case in report.cases
-                if case.eval_id in eval_ids
+                for case in report["cases"]
+                if case.get("eval_id") in eval_ids
             ]
 
             if not variant_cases:
                 continue
 
-            passed = sum(1 for case in variant_cases if case.passed)
+            passed = sum(
+                1 for case in variant_cases if case.get("passed")
+            )
             results[variant_name] = {
                 "passed_cases": passed,
                 "total_cases": len(variant_cases),
                 "pass_rate": passed / len(variant_cases),
                 "cases": [
                     {
-                        "eval_id": case.eval_id,
-                        "passed": case.passed,
-                        "actual_stage": case.actual_stage,
-                        "case_id": case.case_id,
-                        "run_error": case.run_error,
+                        "eval_id": case.get("eval_id"),
+                        "passed": case.get("passed"),
+                        "actual_stage": case.get("actual_stage"),
+                        "case_id": case.get("case_id"),
+                        "run_error": case.get("run_error"),
                     }
                     for case in variant_cases
                 ],
@@ -303,16 +368,14 @@ async def get_evaluation_case(
         match = next(
             (
                 case
-                for case in report.cases
-                if case.eval_id == eval_id
+                for case in report["cases"]
+                if case.get("eval_id") == eval_id
             ),
             None,
         )
 
         if match is not None:
-            variants[variant.value] = match.model_dump(
-                mode="json"
-            )
+            variants[variant.value] = match
 
     if not variants:
         raise HTTPException(
@@ -347,5 +410,4 @@ async def get_evaluation_case(
 async def get_evaluation_variant(
     variant: EvalVariant,
 ) -> dict[str, Any]:
-    report = _load_report(variant)
-    return report.model_dump(mode="json")
+    return _load_report(variant)

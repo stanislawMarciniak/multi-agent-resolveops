@@ -27,6 +27,7 @@ configure_telemetry(
     settings
 )
 
+
 @asynccontextmanager
 async def lifespan(
     _: FastAPI,
@@ -59,11 +60,13 @@ app.include_router(
     system_router
 )
 
+# Last add_middleware call becomes the outermost
+# layer. CORS must wrap OTEL so OPTIONS preflight
+# never hits the FastAPI instrumentor bug with
+# mounted APIRouters (_IncludedRouter has no path).
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-    ],
+    allow_origins=settings.cors_allow_origins(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

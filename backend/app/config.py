@@ -26,6 +26,46 @@ class Settings(BaseSettings):
         "http://localhost:5173"
     )
 
+    def cors_allow_origins(self) -> list[str]:
+        """Expand FRONTEND_ORIGIN for local Vite (localhost vs 127.0.0.1)."""
+        configured = [
+            origin.strip()
+            for origin in self.frontend_origin.split(",")
+            if origin.strip()
+        ]
+
+        origins = set(configured)
+
+        for origin in list(origins):
+            if "://localhost" in origin:
+                origins.add(
+                    origin.replace(
+                        "://localhost",
+                        "://127.0.0.1",
+                        1,
+                    )
+                )
+            if "://127.0.0.1" in origin:
+                origins.add(
+                    origin.replace(
+                        "://127.0.0.1",
+                        "://localhost",
+                        1,
+                    )
+                )
+
+        if self.environment == "development":
+            origins.update(
+                {
+                    "http://localhost:5173",
+                    "http://127.0.0.1:5173",
+                    "http://localhost:4173",
+                    "http://127.0.0.1:4173",
+                }
+            )
+
+        return sorted(origins)
+
     database_url: str = (
         "sqlite:///./data/app.db"
     )

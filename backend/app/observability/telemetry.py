@@ -119,7 +119,12 @@ def configure_telemetry(
 def instrument_fastapi(
     app: FastAPI,
 ) -> None:
+    # opentelemetry-instrumentation-fastapi 0.63b1 crashes while naming
+    # spans for APIRouter-mounted routes (`_IncludedRouter` has no `.path`).
+    # That aborts the request before CORSMiddleware can attach headers, which
+    # browsers report as a CORS failure. Disable FastAPI server spans until
+    # the instrumentation package is upgraded; HTTPX client spans remain.
     FastAPIInstrumentor.instrument_app(
         app,
-        excluded_urls="health",
+        excluded_urls=".*",
     )

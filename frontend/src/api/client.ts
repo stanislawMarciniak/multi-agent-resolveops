@@ -14,8 +14,11 @@ import type {
   ApprovalDecision,
 } from "@/types";
 
+// Prefer Vite proxy (/api → backend) in local dev to avoid CORS.
+// Set VITE_API_URL to call the API directly when needed.
 const API_BASE =
-  import.meta.env.VITE_API_URL ?? "http://localhost:8000";
+  import.meta.env.VITE_API_URL ??
+  (import.meta.env.DEV ? "/api" : "http://localhost:8000");
 
 export class ApiError extends Error {
   status: number;
