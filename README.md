@@ -2,7 +2,7 @@
 
 Multi-agent enterprise case resolution platform: investigate CRM and legacy billing systems, consult policies, propose safe remediation, run independent review, require human approval, then execute mutations deterministically.
 
-![ResolveOps AI operator console](assets/web_view.jpg)
+![ResolveOps AI operator console](assets/web_view.png)
 
 ## What it does
 
